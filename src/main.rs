@@ -1,37 +1,68 @@
-use reqwest::Client;
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
 
-use tokio::task;
+// use std::sync::Arc;
+// use tokio::sync::RwLock;
+use tokio::time::{sleep, Duration};
 
-async fn download_file() -> Result<bool, Box<dyn Error + Send + Sync>> {
-    let url = "http://localhost:3000/sfsymbols.json";
-    let file_path = "sfsymbols.bin";
+use reqwest::{header, Client};
+
+const CHUNK_SIZE: u64 = 512 * 1024;
+
+async fn download_chunk(
+    url: &str,
+    file_path: &str,
+    range: &str,
+) -> Result<bool, Box<dyn Error + Send + Sync>> {
     let client = Client::new();
+    let range_header = header::HeaderValue::from_str(range)?;
 
-    let mut response = client.get(url).send().await?;
+    let mut response = client
+        .get(url)
+        .header(header::RANGE, range_header)
+        .send()
+        .await?;
     let mut file = File::create(file_path)?;
-    let mut chunks = 0;
-    let mut size = 0;
 
     while let Some(chunk) = response.chunk().await? {
-        size += &chunk.len();
-        chunks += 1;
+        sleep(Duration::from_millis(100)).await;
         file.write_all(&chunk)?;
     }
 
-    println!("Total chunks: {chunks}; Total downloaded size: {size} Bytes");
     Ok(true)
+}
+
+async fn get_chunk_vec(url: &str) -> Result<Vec<u64>, Box<dyn Error>> {
+    let client = Client::new();
+    let response = client.head(url).send().await?;
+
+    let content_length: u64 = response
+        .headers()
+        .get("Content-Length")
+        .ok_or("LOL")?
+        .to_str()?
+        .parse()?;
+
+    let mut chunks: Vec<u64> = vec![CHUNK_SIZE; (content_length / CHUNK_SIZE) as usize];
+    chunks.push(content_length % CHUNK_SIZE);
+    Ok(chunks)
 }
 
 #[tokio::main]
 async fn main() {
-    println!("Waiting...");
-    let _result = task::spawn(download_file())
-        .await
-        .unwrap()
-        .expect("Crash!!");
+    let url = "http://localhost:3000/sfsymbols.json";
+    // let url = "https://speed.hetzner.de/100MB.bin";
 
-    println!("Downloaded!! {:?}", _result);
+    match get_chunk_vec(url).await {
+        Ok(val) => {
+            println!("Chunks {:?}", val);
+        }
+
+        Err(err) => {
+            if let Some(_err) = err.downcast_ref::<reqwest::Error>() {
+                println!("Error occurred: {}", _err.is_status());
+            }
+        }
+    }
 }
