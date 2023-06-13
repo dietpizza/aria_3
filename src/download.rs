@@ -1,11 +1,40 @@
 use {
     anyhow::{Context, Result},
     md5,
+    rand::Rng,
     reqwest::Client,
     std::path::Path,
+    std::sync::{Arc, Mutex},
+    tokio::time::{sleep, Duration},
 };
 
 const CHUNK_SIZE: u64 = 4 * 1024 * 1024;
+
+#[derive(Debug)]
+pub struct Chunk {
+    start: u64,
+    end: u64,
+    offset: u64,
+    is_downloaded: bool,
+}
+
+impl Chunk {
+    pub fn new(start: u64, end: u64) -> Chunk {
+        Chunk {
+            start,
+            end,
+            offset: 0,
+            is_downloaded: false,
+        }
+    }
+
+    pub fn update_offset(&mut self, offset: u64) {
+        self.offset = offset;
+        if offset + self.start == self.end {
+            self.is_downloaded = true;
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Download {
@@ -13,32 +42,32 @@ pub struct Download {
     length: u64,
     url: String,
     parent_dir: String,
-    filepath: String,
+    file_path: String,
     is_resumable: bool,
-    ranges: Vec<(u64, u64)>,
+    chunks: Vec<Chunk>,
 }
 
 impl Download {
-    pub fn new(url: &str, filepath: &str) -> Download {
+    pub fn new(url: &str, file_path: &str) -> Download {
         Download {
             // User provided
-            url: url.to_string(),
-            filepath: filepath.to_string(),
+            url: url.to_owned(),
+            file_path: file_path.to_owned(),
 
             // Defaults
             id: "".to_owned(),
             length: 0,
-            ranges: vec![],
             is_resumable: false,
             parent_dir: "".to_owned(),
+            chunks: vec![],
         }
     }
     pub async fn connect(&mut self) -> Result<()> {
         (self.length, self.is_resumable) = get_length(&self.url).await?;
-        self.ranges = gen_ranges(self.length).await?;
+        self.chunks = gen_ranges(self.length).await?;
         self.id = format!("{:x}", md5::compute(&self.url));
 
-        self.parent_dir = Path::new(&self.filepath)
+        self.parent_dir = Path::new(&self.file_path)
             .parent()
             .context("Failed to parse filepath")?
             .to_str()
@@ -49,30 +78,19 @@ impl Download {
     }
 }
 
-async fn gen_ranges(length: u64) -> Result<Vec<(u64, u64)>> {
-    let mut chunk_map: Vec<(u64, u64)> = vec![];
-    let mut chunk_vec = vec![CHUNK_SIZE; (length / CHUNK_SIZE) as usize];
-    let rem = length % CHUNK_SIZE;
-    if rem > 0 {
-        chunk_vec.push(rem);
-    }
-    for i in 0..chunk_vec.len() {
-        let end = chunk_vec
-            .get(i)
-            .context(format!("Failed to get {i}"))?
-            .clone()
-            * (i as u64);
-        let start: u64 = if i > 0 {
-            chunk_vec
-                .get(i - 1)
-                .context(format!("Failed to get {i}"))?
-                .clone()
-                * ((i - 1) as u64)
-        } else {
-            0
-        };
+async fn gen_ranges(length: u64) -> Result<Vec<Chunk>> {
+    let mut chunk_map: Vec<Chunk> = vec![];
+    let mut tmp: u64 = 0;
 
-        chunk_map.push((start, end));
+    let _mod = length / CHUNK_SIZE;
+    let rem = length % CHUNK_SIZE;
+
+    for _ in 0.._mod {
+        chunk_map.push(Chunk::new(tmp, tmp + CHUNK_SIZE - 1));
+        tmp += CHUNK_SIZE;
+    }
+    if rem > 0 {
+        chunk_map.push(Chunk::new(tmp, tmp + rem));
     }
     Ok(chunk_map)
 }
@@ -93,4 +111,31 @@ async fn get_length(url: &str) -> Result<(u64, bool)> {
     // println!("Content-Length {}", file_size);
 
     Ok((content_length, accept_ranges))
+}
+
+pub async fn _run_lol(state: Arc<Mutex<Vec<u64>>>, i: u64) {
+    let random_duration = rand::thread_rng().gen_range(100..10000);
+    sleep(Duration::from_millis(random_duration)).await;
+    let mut _state = state.lock().unwrap();
+    _state.retain(|x| x != &i);
+}
+
+pub async fn _download_scheduler() {
+    let tasks: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(vec![]));
+    let mut i: u64 = 0;
+    loop {
+        sleep(Duration::from_millis(100)).await;
+        let tasks_clone = tasks.clone();
+        let mut _tasks = tasks.lock().unwrap();
+        if _tasks.len() < 4 && i < 100 {
+            _tasks.push(i);
+            tokio::task::spawn(_run_lol(tasks_clone, i));
+            i += 1;
+        };
+        println!("{:?}", _tasks);
+        if _tasks.len() == 0 {
+            println!("Task Completed");
+            break;
+        }
+    }
 }

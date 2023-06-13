@@ -15,7 +15,7 @@ const _CHUNK_SIZE: u64 = 4 * 1024 * 1024;
 
 async fn _download_range(url: &str, start: u64, end: u64, file_path: &str) -> Result<bool> {
     let client = Client::new();
-    let range_header = header::HeaderValue::from_str(&format!("{start}-{end}"))?;
+    let range_header = header::HeaderValue::from_str(&format!("bytes={}-{}", start, end))?;
 
     let mut response = client
         .get(url)
@@ -32,21 +32,21 @@ async fn _download_range(url: &str, start: u64, end: u64, file_path: &str) -> Re
     Ok(true)
 }
 
-async fn _run_lol(state: Arc<Mutex<Vec<u64>>>, i: u64) {
-    let random_duration = rand::thread_rng().gen_range(1..100);
+pub async fn _run_lol(state: Arc<Mutex<Vec<u64>>>, i: u64) {
+    let random_duration = rand::thread_rng().gen_range(100..10000);
     sleep(Duration::from_millis(random_duration)).await;
     let mut _state = state.lock().unwrap();
     _state.retain(|x| x != &i);
 }
 
-async fn _download_scheduler() {
+pub async fn _download_scheduler() {
     let tasks: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(vec![]));
     let mut i: u64 = 0;
     loop {
-        // sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
         let tasks_clone = tasks.clone();
         let mut _tasks = tasks.lock().unwrap();
-        if _tasks.len() < 100 && i < 100 {
+        if _tasks.len() < 4 && i < 100 {
             _tasks.push(i);
             tokio::task::spawn(_run_lol(tasks_clone, i));
             i += 1;

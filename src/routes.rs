@@ -1,16 +1,15 @@
 use crate::download::Download;
-use {axum::response::Html, tokio::spawn};
+use tokio::spawn;
 
-pub async fn ping_handler() -> Html<&'static str> {
+pub async fn ping_handler() -> &'static str {
     spawn(async { run_lol().await });
-    Html("<h1>Hello from the root path!</h1>")
+    "<h1>Hello from the root path!</h1>"
 }
 
 async fn run_lol() {
-    println!("Running lol");
-    let url = "https://speed.hetzner.de/1GB.bin";
+    // println!("Running lol");
+    let url = "http://localhost:3000/sfsymbols.json";
     let mut dl = Download::new(url, "file.bin");
     let _ = dl.connect().await;
-
-    println!("Download {:?}", dl);
+    println!("{:?}", dl);
 }
