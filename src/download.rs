@@ -1,3 +1,7 @@
+use std::{fs::File, io::Write};
+
+use reqwest::header;
+
 use {
     anyhow::{Context, Result},
     md5,
@@ -16,15 +20,19 @@ pub struct Chunk {
     end: u64,
     offset: u64,
     is_downloaded: bool,
+    path: String,
+    url: String,
 }
 
 impl Chunk {
-    pub fn new(start: u64, end: u64) -> Chunk {
+    pub fn new(start: u64, end: u64, url: &str, path: &str) -> Chunk {
         Chunk {
             start,
             end,
             offset: 0,
             is_downloaded: false,
+            url: url.to_owned(),
+            path: path.to_owned(),
         }
     }
 
@@ -33,6 +41,26 @@ impl Chunk {
         if offset + self.start == self.end {
             self.is_downloaded = true;
         }
+    }
+
+    pub async fn download_chunk(&mut self) -> Result<bool> {
+        let client = Client::new();
+        let range_header =
+            header::HeaderValue::from_str(&format!("bytes={}-{}", self.start, self.end))?;
+
+        let mut response = client
+            .get(&self.url)
+            .header(header::RANGE, range_header)
+            .send()
+            .await?;
+        let mut file = File::create(&self.path)?;
+
+        while let Some(chunk) = response.chunk().await? {
+            sleep(Duration::from_millis(100)).await;
+            file.write_all(&chunk)?;
+        }
+
+        Ok(true)
     }
 }
 
@@ -64,9 +92,8 @@ impl Download {
     }
     pub async fn connect(&mut self) -> Result<()> {
         (self.length, self.is_resumable) = get_length(&self.url).await?;
-        self.chunks = gen_ranges(self.length).await?;
+        self.chunks = gen_ranges(self.length, &self.url, &self.file_path).await?;
         self.id = format!("{:x}", md5::compute(&self.url));
-
         self.parent_dir = Path::new(&self.file_path)
             .parent()
             .context("Failed to parse filepath")?
@@ -78,7 +105,7 @@ impl Download {
     }
 }
 
-async fn gen_ranges(length: u64) -> Result<Vec<Chunk>> {
+async fn gen_ranges(length: u64, url: &str, path: &str) -> Result<Vec<Chunk>> {
     let mut chunk_map: Vec<Chunk> = vec![];
     let mut tmp: u64 = 0;
 
@@ -86,11 +113,11 @@ async fn gen_ranges(length: u64) -> Result<Vec<Chunk>> {
     let rem = length % CHUNK_SIZE;
 
     for _ in 0.._mod {
-        chunk_map.push(Chunk::new(tmp, tmp + CHUNK_SIZE - 1));
+        chunk_map.push(Chunk::new(tmp, tmp + CHUNK_SIZE - 1, url, path));
         tmp += CHUNK_SIZE;
     }
     if rem > 0 {
-        chunk_map.push(Chunk::new(tmp, tmp + rem));
+        chunk_map.push(Chunk::new(tmp, tmp + rem, url, path));
     }
     Ok(chunk_map)
 }
